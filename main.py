@@ -2,24 +2,34 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 from pydantic import BaseModel
-from typing import Optional
 import os
 from dotenv import load_dotenv
 from datetime import datetime
 from collections import defaultdict
+from pathlib import Path # <--- ¡ESTO ERA LO QUE FALTABA!
 
-load_dotenv()
+# --- CONFIGURACIÓN DE CARGA FORZADA DE .ENV ---
+# Esto busca el archivo .env explícitamente en la carpeta actual
+env_path = Path('.') / '.env'
+load_dotenv(dotenv_path=env_path)
 
-url: str = os.environ.get("https://kplnksqjolmbkuxdvtxh.supabase.co")
-key: str = os.environ.get("sb_secret_zxZEBWpu6PBnoKcFBXOFLQ_SvjMw36y")
+print("--- DEBUG DIAGNÓSTICO ---")
+print(f"Buscando .env en: {env_path.absolute()}")
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_KEY")
+print(f"URL detectada: {url}")
+# Ocultamos la clave para seguridad, solo decimos si existe
+print(f"KEY detectada: {'SÍ (Oculta)' if key else 'NO ENCONTRADA ❌'}")
+print("-------------------------")
 
 if not url or not key:
-    raise ValueError("Error config ENV")
+    raise ValueError("¡Error CRÍTICO! No se encontraron SUPABASE_URL o SUPABASE_KEY en el archivo .env")
 
 supabase: Client = create_client(url, key)
 
 app = FastAPI()
 
+# Permisos para que el Frontend (React) pueda hablar con este Backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,7 +42,7 @@ app.add_middleware(
 class MovimientoInventario(BaseModel):
     producto_nombre: str 
     cantidad: int
-    tipo: str # "PRODUCCION", "VENTA", "AJUSTE_MANUAL"
+    tipo: str # "PRODUCCION", "VENTA"
 
 class NuevoProducto(BaseModel):
     nombre: str
@@ -42,7 +52,7 @@ class NuevoProducto(BaseModel):
 class EditarProducto(BaseModel):
     stock_minimo: int
 
-# --- ENDPOINTS BÁSICOS ---
+# --- ENDPOINTS PÚBLICOS ---
 
 @app.get("/")
 def read_root():
@@ -50,7 +60,7 @@ def read_root():
 
 @app.get("/inventario")
 def ver_inventario():
-    # Ordenamos por id para que no salten al editar
+    # Ordenamos por ID para que la lista no salte visualmente
     response = supabase.table("productos").select("*").order('id').execute()
     return response.data
 
@@ -75,12 +85,10 @@ def registrar_movimiento(movimiento: MovimientoInventario):
 
     return {"mensaje": "Ok", "nuevo_stock": nuevo_stock}
 
-# --- NUEVOS PODERES DE SUPERVISOR ---
+# --- ENDPOINTS DE SUPERVISOR (Nuevos) ---
 
-# 1. Crear un nuevo sabor (Producto)
 @app.post("/admin/productos")
 def crear_producto(nuevo: NuevoProducto):
-    # Verificamos si ya existe
     existe = supabase.table("productos").select("*").eq("nombre", nuevo.nombre).execute()
     if existe.data:
         raise HTTPException(status_code=400, detail="Este producto ya existe")
@@ -93,40 +101,35 @@ def crear_producto(nuevo: NuevoProducto):
     supabase.table("productos").insert(datos).execute()
     return {"mensaje": "Producto creado exitosamente"}
 
-# 2. Eliminar un sabor (Cuidado: Esto es destructivo)
 @app.delete("/admin/productos/{id}")
 def borrar_producto(id: int):
-    # Primero borramos movimientos para no romper la base de datos (Integridad referencial)
+    # Primero borramos movimientos para mantener integridad de base de datos
     supabase.table("movimientos").delete().eq("producto_id", id).execute()
-    # Luego borramos el producto
     supabase.table("productos").delete().eq("id", id).execute()
     return {"mensaje": "Producto eliminado"}
 
-# 3. Editar el mínimo de alerta
 @app.put("/admin/productos/{id}")
 def editar_producto(id: int, edicion: EditarProducto):
     supabase.table("productos").update({"stock_minimo": edicion.stock_minimo}).eq("id", id).execute()
     return {"mensaje": "Configuración actualizada"}
 
-# 4. DASHBOARD: Reporte Mensual
 @app.get("/admin/reportes/mensual")
 def reporte_mensual():
-    # Traemos todos los movimientos (En un sistema real filtraríamos por fechas aquí mismo)
+    # Traemos todos los movimientos
     response = supabase.table("movimientos").select("*, productos(nombre)").execute()
     movimientos = response.data
 
-    # Procesamos los datos con Python
+    # Agrupamos por mes (YYYY-MM)
     reporte = defaultdict(lambda: {"entradas": 0, "salidas": 0, "neto": 0})
 
     for mov in movimientos:
-        # Extraemos el mes (ej: "2023-12")
-        fecha = mov['created_at'][:7] 
+        fecha = mov['created_at'][:7] # Tomamos solo "2023-12"
         cantidad = mov['cantidad']
         
         if cantidad > 0:
             reporte[fecha]["entradas"] += cantidad
         else:
-            reporte[fecha]["salidas"] += abs(cantidad) # Ponemos positivo para contar volumen
+            reporte[fecha]["salidas"] += abs(cantidad)
         
         reporte[fecha]["neto"] += cantidad
 
