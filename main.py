@@ -111,26 +111,30 @@ def editar_producto(id: int, edicion: EditarProducto):
     supabase.table("productos").update({"stock_minimo": edicion.stock_minimo}).eq("id", id).execute()
     return {"mensaje": "Configuración actualizada"}
 
-# --- REPORTE AVANZADO (Para Gráfica Apilada) ---
+# --- REPORTE AVANZADO (Para Gráfica Apilada Doble) ---
 @app.get("/admin/reportes/mensual")
 def reporte_mensual():
     # 1. Traemos movimientos y el nombre del producto asociado
     response = supabase.table("movimientos").select("*, productos(nombre)").execute()
     movimientos = response.data
 
-    # 2. Estructura de datos: Diccionario de Meses -> Diccionario de Productos
-    # Ejemplo: {'2023-11': {'Carne': 50, 'Pollo': 30}, '2023-12': ...}
-    # Esto permite que el Frontend pinte cada producto de un color distinto
+    # 2. Estructura: {'2023-11': {'Entrada: Carne': 50, 'Salida: Carne': 20}}
     reporte = defaultdict(lambda: defaultdict(int))
 
     for mov in movimientos:
         fecha = mov['created_at'][:7] # "YYYY-MM"
+        if not mov['productos']: continue # Por si se borró el producto
+        
         nombre_producto = mov['productos']['nombre']
         cantidad = mov['cantidad']
         
-        # Solo nos interesan las VENTAS (Salidas) para este reporte de demanda
-        if cantidad < 0:
-            # Sumamos el valor positivo (abs) para la gráfica
-            reporte[fecha][nombre_producto] += abs(cantidad)
+        if cantidad > 0:
+            # Es PRODUCCIÓN
+            clave = f"Entrada: {nombre_producto}"
+            reporte[fecha][clave] += cantidad
+        else:
+            # Es VENTA (Guardamos positivo para la gráfica)
+            clave = f"Salida: {nombre_producto}"
+            reporte[fecha][clave] += abs(cantidad)
 
     return reporte
