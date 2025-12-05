@@ -1,27 +1,34 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware # <--- ¡NUEVO IMPORT!
 from supabase import create_client, Client
 from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
 from datetime import datetime
 
-# Cargar variables de entorno (tus claves secretas)
 load_dotenv()
 
-# Configuración de Supabase
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
 
-# Verificamos que las claves existan
 if not url or not key:
-    raise ValueError("¡Error! No encontré SUPABASE_URL o SUPABASE_KEY en el archivo .env")
+    raise ValueError("Error config ENV")
 
-# Conectamos con la base de datos
 supabase: Client = create_client(url, key)
 
 app = FastAPI()
 
-# Modelo de datos (qué esperamos recibir)
+# --- AQUÍ ESTÁ EL CAMBIO IMPORTANTE ---
+# Esto permite que tu App Web (y cualquiera) pueda hablar con este servidor
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # "*" significa "Todos son bienvenidos"
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# --------------------------------------
+
 class MovimientoInventario(BaseModel):
     producto_nombre: str 
     cantidad: int
@@ -31,9 +38,14 @@ class MovimientoInventario(BaseModel):
 def read_root():
     return {"mensaje": "API de Salteñas funcionando 🥟"}
 
+# Endpoint para ver inventario (GET)
+@app.get("/inventario")
+def ver_inventario():
+    response = supabase.table("productos").select("*").execute()
+    return response.data
+
 @app.post("/registrar-movimiento")
 def registrar_movimiento(movimiento: MovimientoInventario):
-    # 1. Buscar producto por nombre
     response = supabase.table("productos").select("*").eq("nombre", movimiento.producto_nombre).execute()
     
     if not response.data:
@@ -42,7 +54,6 @@ def registrar_movimiento(movimiento: MovimientoInventario):
     producto = response.data[0]
     nuevo_stock = producto['stock_actual'] + movimiento.cantidad
 
-    # 2. Guardar en el historial
     data_historial = {
         "producto_id": producto['id'],
         "cantidad": movimiento.cantidad,
@@ -50,12 +61,6 @@ def registrar_movimiento(movimiento: MovimientoInventario):
         "created_at": datetime.now().isoformat()
     }
     supabase.table("movimientos").insert(data_historial).execute()
-
-    # 3. Actualizar el stock total
     supabase.table("productos").update({"stock_actual": nuevo_stock}).eq("id", producto['id']).execute()
 
-    return {
-        "mensaje": "Inventario actualizado", 
-        "producto": movimiento.producto_nombre, 
-        "nuevo_stock": nuevo_stock
-    }
+    return {"mensaje": "Ok", "nuevo_stock": nuevo_stock}
