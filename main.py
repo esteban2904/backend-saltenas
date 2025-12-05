@@ -6,19 +6,17 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime
 from collections import defaultdict
-from pathlib import Path # <--- ¡ESTO ERA LO QUE FALTABA!
+from pathlib import Path 
 
-# --- CONFIGURACIÓN DE CARGA FORZADA DE .ENV ---
+# --- CONFIGURACIÓN DE CARGA DE .ENV ---
 # Esto busca el archivo .env explícitamente en la carpeta actual
 env_path = Path('.') / '.env'
 load_dotenv(dotenv_path=env_path)
 
 print("--- DEBUG DIAGNÓSTICO ---")
-print(f"Buscando .env en: {env_path.absolute()}")
 url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_KEY")
 print(f"URL detectada: {url}")
-# Ocultamos la clave para seguridad, solo decimos si existe
 print(f"KEY detectada: {'SÍ (Oculta)' if key else 'NO ENCONTRADA ❌'}")
 print("-------------------------")
 
@@ -29,7 +27,7 @@ supabase: Client = create_client(url, key)
 
 app = FastAPI()
 
-# Permisos para que el Frontend (React) pueda hablar con este Backend
+# Configuración de CORS (Permitir que React hable con Python)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -52,7 +50,7 @@ class NuevoProducto(BaseModel):
 class EditarProducto(BaseModel):
     stock_minimo: int
 
-# --- ENDPOINTS PÚBLICOS ---
+# --- ENDPOINTS PÚBLICOS (Para el Escáner y App) ---
 
 @app.get("/")
 def read_root():
@@ -85,7 +83,7 @@ def registrar_movimiento(movimiento: MovimientoInventario):
 
     return {"mensaje": "Ok", "nuevo_stock": nuevo_stock}
 
-# --- ENDPOINTS DE SUPERVISOR (Nuevos) ---
+# --- ENDPOINTS DE SUPERVISOR (Gestión) ---
 
 @app.post("/admin/productos")
 def crear_producto(nuevo: NuevoProducto):
@@ -113,24 +111,26 @@ def editar_producto(id: int, edicion: EditarProducto):
     supabase.table("productos").update({"stock_minimo": edicion.stock_minimo}).eq("id", id).execute()
     return {"mensaje": "Configuración actualizada"}
 
+# --- REPORTE AVANZADO (Para Gráfica Apilada) ---
 @app.get("/admin/reportes/mensual")
 def reporte_mensual():
-    # Traemos todos los movimientos
+    # 1. Traemos movimientos y el nombre del producto asociado
     response = supabase.table("movimientos").select("*, productos(nombre)").execute()
     movimientos = response.data
 
-    # Agrupamos por mes (YYYY-MM)
-    reporte = defaultdict(lambda: {"entradas": 0, "salidas": 0, "neto": 0})
+    # 2. Estructura de datos: Diccionario de Meses -> Diccionario de Productos
+    # Ejemplo: {'2023-11': {'Carne': 50, 'Pollo': 30}, '2023-12': ...}
+    # Esto permite que el Frontend pinte cada producto de un color distinto
+    reporte = defaultdict(lambda: defaultdict(int))
 
     for mov in movimientos:
-        fecha = mov['created_at'][:7] # Tomamos solo "2023-12"
+        fecha = mov['created_at'][:7] # "YYYY-MM"
+        nombre_producto = mov['productos']['nombre']
         cantidad = mov['cantidad']
         
-        if cantidad > 0:
-            reporte[fecha]["entradas"] += cantidad
-        else:
-            reporte[fecha]["salidas"] += abs(cantidad)
-        
-        reporte[fecha]["neto"] += cantidad
+        # Solo nos interesan las VENTAS (Salidas) para este reporte de demanda
+        if cantidad < 0:
+            # Sumamos el valor positivo (abs) para la gráfica
+            reporte[fecha][nombre_producto] += abs(cantidad)
 
     return reporte
