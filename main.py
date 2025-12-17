@@ -36,29 +36,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- MODELOS DE DATOS ---
+# --- MODELOS ACTUALIZADOS ---
 class MovimientoInventario(BaseModel):
     producto_nombre: str 
-    cantidad: int
-    tipo: str # "PRODUCCION", "VENTA"
+    cantidad: int     # Ahora esto representa UNIDADES sueltas
+    tipo: str 
 
 class NuevoProducto(BaseModel):
     nombre: str
     stock_minimo: int
     stock_inicial: int = 0
+    # NUEVOS CAMPOS:
+    unidades_por_bandeja: int 
+    unidades_por_bolsa: int
 
 class EditarProducto(BaseModel):
     stock_minimo: int
+    unidades_por_bandeja: int
+    unidades_por_bolsa: int
 
-# --- ENDPOINTS PÚBLICOS (Para el Escáner y App) ---
+# --- ENDPOINTS ---
 
 @app.get("/")
 def read_root():
-    return {"mensaje": "Sistema ERP Salteñas v2.0 Activo 🚀"}
+    return {"mensaje": "ERP v3.0 (Unidades Reales)"}
 
 @app.get("/inventario")
 def ver_inventario():
-    # Ordenamos por ID para que la lista no salte visualmente
     response = supabase.table("productos").select("*").order('id').execute()
     return response.data
 
@@ -70,6 +74,8 @@ def registrar_movimiento(movimiento: MovimientoInventario):
         raise HTTPException(status_code=404, detail=f"Producto '{movimiento.producto_nombre}' no encontrado.")
     
     producto = response.data[0]
+    
+    # La cantidad ya viene calculada desde el frontend (ej: +30 o -10)
     nuevo_stock = producto['stock_actual'] + movimiento.cantidad
 
     data_historial = {
@@ -83,7 +89,7 @@ def registrar_movimiento(movimiento: MovimientoInventario):
 
     return {"mensaje": "Ok", "nuevo_stock": nuevo_stock}
 
-# --- ENDPOINTS DE SUPERVISOR (Gestión) ---
+# --- GESTIÓN DE PRODUCTOS ---
 
 @app.post("/admin/productos")
 def crear_producto(nuevo: NuevoProducto):
@@ -94,47 +100,44 @@ def crear_producto(nuevo: NuevoProducto):
     datos = {
         "nombre": nuevo.nombre,
         "stock_minimo": nuevo.stock_minimo,
-        "stock_actual": nuevo.stock_inicial
+        "stock_actual": nuevo.stock_inicial,
+        "unidades_por_bandeja": nuevo.unidades_por_bandeja,
+        "unidades_por_bolsa": nuevo.unidades_por_bolsa
     }
     supabase.table("productos").insert(datos).execute()
-    return {"mensaje": "Producto creado exitosamente"}
+    return {"mensaje": "Producto creado"}
 
 @app.delete("/admin/productos/{id}")
 def borrar_producto(id: int):
-    # Primero borramos movimientos para mantener integridad de base de datos
     supabase.table("movimientos").delete().eq("producto_id", id).execute()
     supabase.table("productos").delete().eq("id", id).execute()
-    return {"mensaje": "Producto eliminado"}
+    return {"mensaje": "Eliminado"}
 
 @app.put("/admin/productos/{id}")
 def editar_producto(id: int, edicion: EditarProducto):
-    supabase.table("productos").update({"stock_minimo": edicion.stock_minimo}).eq("id", id).execute()
-    return {"mensaje": "Configuración actualizada"}
+    supabase.table("productos").update({
+        "stock_minimo": edicion.stock_minimo,
+        "unidades_por_bandeja": edicion.unidades_por_bandeja,
+        "unidades_por_bolsa": edicion.unidades_por_bolsa
+    }).eq("id", id).execute()
+    return {"mensaje": "Actualizado"}
 
-# --- REPORTE AVANZADO (Para Gráfica Apilada Doble) ---
 @app.get("/admin/reportes/mensual")
 def reporte_mensual():
-    # 1. Traemos movimientos y el nombre del producto asociado
     response = supabase.table("movimientos").select("*, productos(nombre)").execute()
     movimientos = response.data
-
-    # 2. Estructura: {'2023-11': {'Entrada: Carne': 50, 'Salida: Carne': 20}}
     reporte = defaultdict(lambda: defaultdict(int))
 
     for mov in movimientos:
-        fecha = mov['created_at'][:7] # "YYYY-MM"
-        if not mov['productos']: continue # Por si se borró el producto
+        fecha = mov['created_at'][:7]
+        if not mov['productos']: continue
         
-        nombre_producto = mov['productos']['nombre']
+        nombre = mov['productos']['nombre']
         cantidad = mov['cantidad']
         
         if cantidad > 0:
-            # Es PRODUCCIÓN
-            clave = f"Entrada: {nombre_producto}"
-            reporte[fecha][clave] += cantidad
+            reporte[fecha][f"Entrada: {nombre}"] += cantidad
         else:
-            # Es VENTA (Guardamos positivo para la gráfica)
-            clave = f"Salida: {nombre_producto}"
-            reporte[fecha][clave] += abs(cantidad)
+            reporte[fecha][f"Salida: {nombre}"] += abs(cantidad)
 
     return reporte
