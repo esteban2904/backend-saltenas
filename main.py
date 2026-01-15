@@ -141,3 +141,28 @@ def reporte_mensual():
             reporte[fecha][f"Salida: {nombre}"] += abs(cantidad)
 
     return reporte
+
+# --- REPORTE DIARIO (Nuevo) ---
+@app.get("/admin/reportes/diario")
+def reporte_diario():
+    # Traemos movimientos
+    response = supabase.table("movimientos").select("*, productos(nombre)").execute()
+    movimientos = response.data
+
+    # Estructura: {'2023-12-15': {'Entrada: Carne': 50, ...}}
+    reporte = defaultdict(lambda: defaultdict(int))
+
+    for mov in movimientos:
+        # AQUÍ ESTÁ LA DIFERENCIA: Tomamos 10 caracteres (YYYY-MM-DD) en vez de 7
+        fecha = mov['created_at'][:10] 
+        if not mov['productos']: continue
+        
+        nombre = mov['productos']['nombre']
+        cantidad = mov['cantidad']
+        
+        if cantidad > 0:
+            reporte[fecha][f"Entrada: {nombre}"] += cantidad
+        else:
+            reporte[fecha][f"Salida: {nombre}"] += abs(cantidad)
+
+    return reporte
